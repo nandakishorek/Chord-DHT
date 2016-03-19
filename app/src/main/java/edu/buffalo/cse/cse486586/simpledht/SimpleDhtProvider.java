@@ -95,7 +95,7 @@ public class SimpleDhtProvider extends ContentProvider {
 
         // gen node id
         try {
-            mNodeId = genHash(String.valueOf(Integer.parseInt(mPort) / 2));
+            mNodeId = HashUtility.genHash(String.valueOf(Integer.parseInt(mPort) / 2));
         } catch (NoSuchAlgorithmException e) {
             Log.e(TAG, "onCreate: SHA-1 not supported");
         }
@@ -103,7 +103,7 @@ public class SimpleDhtProvider extends ContentProvider {
         // start the server thread
         try {
             ServerSocket serverSocket = new ServerSocket(SERVER_PORT, 5);
-            mServerTask = new ServerTask(mPort, mState);
+            mServerTask = new ServerTask(mPort, mNodeId, mState);
             mServerTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, serverSocket);
         } catch (IOException e) {
             Log.e(TAG, "Can't create a ServerSocket - " + e.getMessage());
@@ -149,16 +149,6 @@ public class SimpleDhtProvider extends ContentProvider {
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
         Log.v(TAG, "update");
         return 0;
-    }
-
-    private String genHash(String input) throws NoSuchAlgorithmException {
-        MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
-        byte[] sha1Hash = sha1.digest(input.getBytes());
-        Formatter formatter = new Formatter();
-        for (byte b : sha1Hash) {
-            formatter.format("%02x", b);
-        }
-        return formatter.toString();
     }
 
     @Override

@@ -13,22 +13,32 @@ public class State {
 
     private boolean joined; // set after joining the ring
     private String predNode;
+    private String predNodeId;
     private String sucNode;
+    private String sucNodeId;
 
-    public synchronized String getPredNode() {
-        return predNode;
+    public synchronized String[] getPredNode() {
+        String[] ret = new String[2];
+        ret[0] = predNode;
+        ret[1] = predNodeId;
+        return ret;
     }
 
-    public synchronized void setPredNode(String predNode) {
+    public synchronized void setPredNode(String predNode, String predNodeId) {
         this.predNode = predNode;
+        this.predNodeId = predNodeId;
     }
 
-    public synchronized String getSucNode() {
-        return sucNode;
+    public synchronized String[] getSucNode() {
+        String[] ret = new String[2];
+        ret[0] = sucNode;
+        ret[1] = sucNodeId;
+        return ret;
     }
 
-    public synchronized void setSucNode(String sucNode) {
+    public synchronized void setSucNode(String sucNode, String sucNodeId) {
         this.sucNode = sucNode;
+        this.sucNodeId = sucNodeId;
     }
 
     public synchronized boolean isJoined() {
