@@ -1,13 +1,20 @@
 package edu.buffalo.cse.cse486586.simpledht;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.UnknownHostException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.AbstractMap;
 import java.util.Formatter;
 
 import android.content.ContentProvider;
@@ -61,14 +68,46 @@ public class SimpleDhtProvider extends ContentProvider {
 
     @Override
     public Uri insert(Uri uri, ContentValues values) {
+        String key = (String) values.get(KEY_FIELD);
+        String val = (String) values.get(VALUE_FIELD);
+
         if (mState.isJoined()) {
-            return null;
+            if (isLocal(key)) {
+                insertLocal(key, val);
+            } else {
+                insertSuccessor(key, val);
+            }
         } else {
-            String key = (String) values.get(KEY_FIELD);
-            String val = (String) values.get(VALUE_FIELD);
             insertLocal(key, val);
-            return uri;
         }
+        return uri;
+    }
+
+    /**
+     * Method to determine whether the key belongs to this node or not
+     *
+     * @param key
+     * @return
+     */
+    private boolean isLocal(String key) {
+        try {
+            String keyHash = HashUtility.genHash(key);
+            String[] pred = mState.getPredNode();
+            Log.v(TAG, "isLocal key "+ key+ " keyhash " +keyHash + " pred " + pred[0] + " prenodeid " + pred[1]);
+            if (pred[1].compareTo(mNodeId) > 0) {
+                // 0 lies in between this and pred
+                if (pred[1].compareTo(keyHash) < 0 || mNodeId.compareTo(keyHash) >= 0) {
+                    return true;
+                }
+                return false;
+            } else if (mNodeId.compareTo(keyHash) >= 0 && pred[1].compareTo(keyHash) < 0) {
+                return true;
+            }
+        } catch (NoSuchAlgorithmException e) {
+            Log.e(TAG, "SHA-1 not supported");
+            e.printStackTrace();
+        }
+        return false;
     }
 
     private void insertLocal(String key, String val) {
@@ -81,6 +120,19 @@ public class SimpleDhtProvider extends ContentProvider {
             Log.e(TAG, "Error writing to file - " + key);
         }
         Log.v(TAG, "insert local key: " + key + " value: " + val);
+    }
+
+    /**
+     * Pass the key, val to successor for insertion
+     *
+     * @param key
+     * @param val
+     */
+    private void insertSuccessor(String key, String val) {
+        String[] successor = mState.getSucNode();
+        Message message = new Message(Message.Type.ADD, successor[0], successor[1]);
+        message.getResult().add(new AbstractMap.SimpleEntry<String, String>(key, val));
+        new InsertTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message);
     }
 
     @Override
@@ -103,7 +155,7 @@ public class SimpleDhtProvider extends ContentProvider {
         // start the server thread
         try {
             ServerSocket serverSocket = new ServerSocket(SERVER_PORT, 5);
-            mServerTask = new ServerTask(mPort, mNodeId, mState);
+            mServerTask = new ServerTask(mPort, mNodeId, mState, getContext().getContentResolver());
             mServerTask.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, serverSocket);
         } catch (IOException e) {
             Log.e(TAG, "Can't create a ServerSocket - " + e.getMessage());
@@ -154,5 +206,27 @@ public class SimpleDhtProvider extends ContentProvider {
     @Override
     public void shutdown() {
         super.shutdown();
+    }
+
+    private class InsertTask extends AsyncTask<Message, Void, Void> {
+
+        @Override
+        protected Void doInBackground(Message... msgs) {
+            Message message = msgs[0];
+
+            try (Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),Integer.parseInt(message.getNodePort()));
+                 BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+            ){
+                String msgToSend = message.toString();
+                Log.v(TAG, "send to successor " + msgToSend);
+                bw.write(msgToSend + "\n");
+                bw.flush();
+            } catch (IOException ioe) {
+                Log.e(TAG, "Error sending insert to successor");
+                ioe.printStackTrace();
+            }
+
+            return null;
+        }
     }
 }

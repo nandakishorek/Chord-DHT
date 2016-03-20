@@ -1,5 +1,6 @@
 package edu.buffalo.cse.cse486586.simpledht;
 
+import android.content.ContentResolver;
 import android.os.AsyncTask;
 import android.util.Log;
 
@@ -26,8 +27,9 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
     private String mNodeId; // hash of node port
     private State mState;
     private TreeMap<String, String> mNodeMap;
+    private MessageStore mMessageStore;
 
-    public ServerTask(String myPort, String nodeId, State state) {
+    public ServerTask(String myPort, String nodeId, State state, ContentResolver cr) {
         this.mPort = myPort;
         this.mNodeId = nodeId;
         this.mState = state;
@@ -36,6 +38,7 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
             // leader node
             mNodeMap.put(mNodeId, mPort);
         }
+        this.mMessageStore = new MessageStore(cr);
     }
 
     @Override
@@ -83,6 +86,10 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
                             handle_join(msg, bw);
                             break;
                         case LOOKUP:
+                            break;
+                        case ADD:
+                            Map.Entry<String, String> entry = msg.getResult().get(0);
+                            mMessageStore.insert(entry.getKey(), entry.getValue());
                             break;
                         case SUCC:
                             mState.setSucNode(msg.getNodePort(), msg.getNodeId());
