@@ -12,6 +12,7 @@ import java.io.OutputStreamWriter;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -86,6 +87,7 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
                             handle_join(msg, bw);
                             break;
                         case LOOKUP:
+                            handle_lookup(msg, bw);
                             break;
                         case ADD:
                             Map.Entry<String, String> entry = msg.getResult().get(0);
@@ -96,7 +98,7 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
                             Log.v(TAG, "Changed successor to " + msg.getNodePort());
                             break;
                         case PRED:
-                            mState.setSucNode(msg.getNodePort(), msg.getNodeId());
+                            mState.setPredNode(msg.getNodePort(), msg.getNodeId());
                             Log.v(TAG, "Changed predecessor to " + msg.getNodePort());
                             break;
                         default:
@@ -122,6 +124,12 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
         return null;
     }
 
+    /**
+     * Method to handle JOIN requests from peers
+     * NOTE: only leader executes this
+     * @param msg JOIN request
+     * @param bw write handle to peer socket
+     */
     private void handle_join(Message msg, BufferedWriter bw) {
         // create response message
         if (mNodeMap.size() == 1) {
@@ -171,6 +179,11 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
         }
     }
 
+    /**
+     * Method to process JOIN response from leader
+     *
+     * @param msg JOIN response message
+     */
     private void handle_join_resp(Message msg) {
         // set predecessor and successor
         String succ = msg.getSuccNode();
@@ -203,6 +216,29 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
             bw.flush();
         } catch (IOException ioe) {
             Log.e(TAG, "Error sending message to successor");
+            ioe.printStackTrace();
+        }
+    }
+
+    /**
+     * Method to handle key lookup from peers
+     *
+     * @param msg Lookup message
+     * @param bw write handle to peer socket
+     */
+    private void handle_lookup(Message msg, BufferedWriter bw) {
+        // query local provider
+        List<Map.Entry<String, String>> resultList = mMessageStore.query(msg.getKey(), msg.getNodePort(), msg.getNodeId());
+
+        // send the results back to the origin
+        msg.getResult().addAll(resultList);
+        try{
+            String resp = msg.toString();
+            bw.write(resp + "\n");
+            bw.flush();
+            Log.v(TAG, "handle_lookup sent resp - " + resp);
+        } catch (IOException ioe) {
+            Log.v(TAG, "error sending back query response");
             ioe.printStackTrace();
         }
     }

@@ -2,7 +2,6 @@ package edu.buffalo.cse.cse486586.simpledht;
 
 import java.util.AbstractMap;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -115,6 +114,11 @@ public class Message {
         this.succNodeId = succNodeId;
     }
 
+    /**
+     * Method to serialize message into string
+     *
+     * @return
+     */
     @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
@@ -136,6 +140,11 @@ public class Message {
         return sb.toString();
     }
 
+    /**
+     * Method to parse the string into message object
+     *
+     * @param rcvMessage
+     */
     private void parseMessage(String rcvMessage) {
         String[] vals = rcvMessage.split("\\"+DELIM);
         this.type = Type.valueOf(vals[0]);
@@ -146,8 +155,8 @@ public class Message {
         this.predNodeId = vals[5];
         this.succNode = vals[6];
         this.succNodeId = vals[7];
-        int resultSize = Integer.parseInt(vals[8]);
-        for (int i = 0; i < resultSize; ++i) {
+        int resultSize = Integer.parseInt(vals[8]) * 2;
+        for (int i = 0; i < resultSize; i+=2) {
             Map.Entry<String, String> entry = new AbstractMap.SimpleEntry<String, String>(vals[i + 9], vals[i + 10]);
             result.add(entry);
         }

@@ -17,6 +17,10 @@ public class SimpleDhtActivity extends Activity {
         tv.setMovementMethod(new ScrollingMovementMethod());
         findViewById(R.id.button3).setOnClickListener(
                 new OnTestClickListener(tv, getContentResolver()));
+        findViewById(R.id.button_ldump).setOnClickListener(
+                new DumpClickListener(tv, getContentResolver()));
+        findViewById(R.id.button_gdump).setOnClickListener(
+                new DumpClickListener(tv, getContentResolver()));
     }
 
     @Override

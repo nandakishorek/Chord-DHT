@@ -7,15 +7,13 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
-import java.io.PrintWriter;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.UnknownHostException;
-import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.AbstractMap;
-import java.util.Formatter;
+import java.util.List;
+import java.util.Map;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
@@ -24,6 +22,7 @@ import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
 import android.os.AsyncTask;
+import android.os.ConditionVariable;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 
@@ -42,6 +41,8 @@ public class SimpleDhtProvider extends ContentProvider {
     private String mNodeId; // hash of the emulator port, ex. hash("5554");
     private ServerTask mServerTask;
     private State mState = new State();
+    private Cursor mCursor; // will hold the query result from the successor
+    private ConditionVariable mQueryDoneCV = new ConditionVariable(false);
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
@@ -93,7 +94,7 @@ public class SimpleDhtProvider extends ContentProvider {
         try {
             String keyHash = HashUtility.genHash(key);
             String[] pred = mState.getPredNode();
-            Log.v(TAG, "isLocal key "+ key+ " keyhash " +keyHash + " pred " + pred[0] + " prenodeid " + pred[1]);
+            Log.v(TAG, "isLocal key " + key + " keyhash " + keyHash + " pred " + pred[0] + " prenodeid " + pred[1]);
             if (pred[1].compareTo(mNodeId) > 0) {
                 // 0 lies in between this and pred
                 if (pred[1].compareTo(keyHash) < 0 || mNodeId.compareTo(keyHash) >= 0) {
@@ -167,14 +168,47 @@ public class SimpleDhtProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
             String sortOrder) {
-        if (mState.isJoined()) {
-            return null;
+        if (mState.isJoined() && !"@".equals(selection) && ("*".equals(selection) || !isLocal(selection))) {
+            //TODO: network ops in a separate task
+
+            String[] successor = mState.getSucNode();
+            Message message = new Message(Message.Type.LOOKUP, selection);
+
+            if (selectionArgs == null) {
+                // The starting node in the query chain
+                // set the nodeId and nodePort in the message to current node
+                message.setNodePort(mPort);
+                message.setNodeId(mNodeId);
+            } else if (successor[0].equals(selectionArgs[0])) {
+                // last node in the chain
+                Log.v(TAG, "Last node in the chain, return local");
+                return queryLocal(selection);
+            } else {
+                // set the node port and node id to the origin
+                message.setNodePort(selectionArgs[0]);
+                message.setNodeId(selectionArgs[1]);
+            }
+
+            // set the successor node details
+            message.setSuccNode(successor[0]);
+            message.setSuccNodeId(successor[1]);
+
+            // pass the query to successor
+            new QueryTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message);
+
+            // wait for the query to complete
+            mQueryDoneCV.block();
+            mQueryDoneCV.close(); // reset the state
+            Log.v(TAG, "query from peers - done");
+
+            return mCursor;
         } else {
             return queryLocal(selection);
         }
     }
 
     private Cursor queryLocal(String key) {
+        Log.v(TAG, "queryLocal key " + key);
         MatrixCursor cursor = new MatrixCursor(COLUMN_NAMES);
         if (key.equals("*") || key.equals("@")){
             String[] allKeys = getContext().fileList();
@@ -197,6 +231,28 @@ public class SimpleDhtProvider extends ContentProvider {
         }
     }
 
+    /**
+     * Adds all key, val in local partition to the list
+     *
+     * @param result list to be populated
+     */
+    private void addAllLocal(List<Map.Entry<String, String>> result) {
+        Log.v(TAG, "addAllLocal entry - " + result.toString());
+        if (result != null) {
+            String[] allKeys = getContext().fileList();
+            for (String key : allKeys) {
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(getContext().openFileInput(key)))) {
+                    String value = br.readLine();
+                    Log.v(TAG, "adding key " + key + " value " + value);
+                    result.add(new AbstractMap.SimpleEntry<String, String>(key, value));
+                } catch (IOException ioe) {
+                    Log.v(TAG, "addAllLocal key - " + key + "not found");
+                }
+            }
+        }
+        Log.v(TAG, "addAllLocal exit - " + result.toString());
+    }
+
     @Override
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
         Log.v(TAG, "update");
@@ -208,6 +264,9 @@ public class SimpleDhtProvider extends ContentProvider {
         super.shutdown();
     }
 
+    /**
+     * AsyncTask to pass the insert message to successor
+     */
     private class InsertTask extends AsyncTask<Message, Void, Void> {
 
         @Override
@@ -218,13 +277,67 @@ public class SimpleDhtProvider extends ContentProvider {
                  BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
             ){
                 String msgToSend = message.toString();
-                Log.v(TAG, "send to successor " + msgToSend);
                 bw.write(msgToSend + "\n");
                 bw.flush();
+                Log.v(TAG, "sent insert to successor " + msgToSend);
             } catch (IOException ioe) {
                 Log.e(TAG, "Error sending insert to successor");
                 ioe.printStackTrace();
             }
+
+            return null;
+        }
+    }
+
+    /**
+     * AsyncTask to pass the query message to successor
+     */
+    private class QueryTask extends AsyncTask<Message, Void, Void> {
+
+        @Override
+        protected Void doInBackground(Message... msgs) {
+            Message message = msgs[0];
+
+            try (Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),Integer.parseInt(message.getSuccNode()));
+                 BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+                 BufferedReader br = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            ){
+                // pass the query to successor
+                String msgToSend = message.toString();
+                bw.write(msgToSend + "\n");
+                bw.flush();
+                Log.v(TAG, "passed query to successor " + msgToSend);
+
+                // read the response back
+                String line = br.readLine();
+                Message respMsg = new Message(line);
+                List<Map.Entry<String, String>> queryResult = respMsg.getResult();
+
+                // if query if "*", then add local results
+                if ("*".equals(message.getKey())) {
+                    addAllLocal(queryResult);
+                }
+
+                Log.v(TAG, "query result - " + queryResult.toString());
+
+                if (queryResult.size() == 0) {
+                    Log.v(TAG, "query key " + message.getKey() + " not found");
+                    mCursor =  null;
+                } else {
+                    MatrixCursor cursor = new MatrixCursor(COLUMN_NAMES);
+                    for (Map.Entry<String, String> entry : queryResult) {
+                        cursor.addRow(new String[]{entry.getKey(), entry.getValue()});
+                    }
+                    mCursor = cursor;
+                }
+            } catch (IOException ioe) {
+                Log.e(TAG, "Error sending query to successor");
+                ioe.printStackTrace();
+            }
+
+            // notify the main thread
+            mQueryDoneCV.open();
+            Log.v(TAG, "notified the main thread");
 
             return null;
         }
