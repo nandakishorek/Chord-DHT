@@ -1,9 +1,5 @@
 package edu.buffalo.cse.cse486586.simpledht;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
-
 /**
  * Represents the state of this node
  *

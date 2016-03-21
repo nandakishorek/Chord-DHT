@@ -43,21 +43,64 @@ public class SimpleDhtProvider extends ContentProvider {
     private State mState = new State();
     private Cursor mCursor; // will hold the query result from the successor
     private ConditionVariable mQueryDoneCV = new ConditionVariable(false);
+    private int mDelCount;
+    private ConditionVariable mDeleteDoneCV = new ConditionVariable(false);
 
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
-        Log.v(TAG, "delete");
-        if (mState.isJoined()) {
-            return 0;
+        Log.v(TAG, "delete key " + selection);
+        if (mState.isJoined() && !"@".equals(selection) && ("*".equals(selection) || !isLocal(selection))) {
+            String[] successor = mState.getSucNode();
+            Message message = new Message(Message.Type.DEL, mPort, mNodeId);
+            message.setKey(selection);
+
+            if (selectionArgs == null) {
+                // The starting node in the delete query chain
+                // set the nodeId and nodePort in the message to current node
+                message.setNodePort(mPort);
+                message.setNodeId(mNodeId);
+            } else if (successor[0].equals(selectionArgs[0])) {
+                // last node in the chain
+                Log.v(TAG, "Last node in the chain, delete local");
+                mDelCount += deleteLocal(selection);
+                return mDelCount;
+            } else {
+                // set the node port and node id to the origin
+                message.setNodePort(selectionArgs[0]);
+                message.setNodeId(selectionArgs[1]);
+            }
+
+            // set the successor node details
+            message.setSuccNode(successor[0]);
+            message.setSuccNodeId(successor[1]);
+
+            new DeleteTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message);
+
+            // wait for all the peers to delete
+            mDeleteDoneCV.block();
+            mDeleteDoneCV.close();
+
+            Log.v(TAG, "Delete on peers finished count " + mDelCount);
+            return mDelCount;
         } else {
             return deleteLocal(selection);
         }
     }
 
     private int deleteLocal(String key) {
-        if (getContext().deleteFile(key)){
+        if (key.equals("*") || key.equals("@")) {
+            // delete everything
+            String[] allKeys = getContext().fileList();
+            for (String k : allKeys) {
+                getContext().deleteFile(k);
+                Log.v(TAG, "delete local key " + k);
+            }
+            return allKeys.length;
+        } else if (getContext().deleteFile(key)) {
+            Log.v(TAG, "delete local key " + key);
             return 1;
         }
+        Log.v(TAG, "delete local key " + key + " not found");
         return 0;
     }
 
@@ -94,7 +137,6 @@ public class SimpleDhtProvider extends ContentProvider {
         try {
             String keyHash = HashUtility.genHash(key);
             String[] pred = mState.getPredNode();
-            Log.v(TAG, "isLocal key " + key + " keyhash " + keyHash + " pred " + pred[0] + " prenodeid " + pred[1]);
             if (pred[1].compareTo(mNodeId) > 0) {
                 // 0 lies in between this and pred
                 if (pred[1].compareTo(keyHash) < 0 || mNodeId.compareTo(keyHash) >= 0) {
@@ -169,7 +211,6 @@ public class SimpleDhtProvider extends ContentProvider {
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
             String sortOrder) {
         if (mState.isJoined() && !"@".equals(selection) && ("*".equals(selection) || !isLocal(selection))) {
-            //TODO: network ops in a separate task
 
             String[] successor = mState.getSucNode();
             Message message = new Message(Message.Type.LOOKUP, selection);
@@ -225,7 +266,6 @@ public class SimpleDhtProvider extends ContentProvider {
         try (BufferedReader br = new BufferedReader(new InputStreamReader(getContext().openFileInput(key)))) {
             String value = br.readLine();
             cursor.addRow(new String[]{key, value});
-            Log.v(TAG, "query local key - " + key + "value - " + value);
         } catch (IOException ioe) {
             Log.v(TAG, "query local key - " + key + "not found");
         }
@@ -237,20 +277,17 @@ public class SimpleDhtProvider extends ContentProvider {
      * @param result list to be populated
      */
     private void addAllLocal(List<Map.Entry<String, String>> result) {
-        Log.v(TAG, "addAllLocal entry - " + result.toString());
         if (result != null) {
             String[] allKeys = getContext().fileList();
             for (String key : allKeys) {
                 try (BufferedReader br = new BufferedReader(new InputStreamReader(getContext().openFileInput(key)))) {
                     String value = br.readLine();
-                    Log.v(TAG, "adding key " + key + " value " + value);
                     result.add(new AbstractMap.SimpleEntry<String, String>(key, value));
                 } catch (IOException ioe) {
                     Log.v(TAG, "addAllLocal key - " + key + "not found");
                 }
             }
         }
-        Log.v(TAG, "addAllLocal exit - " + result.toString());
     }
 
     @Override
@@ -337,6 +374,44 @@ public class SimpleDhtProvider extends ContentProvider {
 
             // notify the main thread
             mQueryDoneCV.open();
+            Log.v(TAG, "notified the main thread");
+
+            return null;
+        }
+    }
+
+    /**
+     * AsyncTask to pass the delete message to successor
+     */
+    private class DeleteTask extends AsyncTask<Message, Void, Void> {
+
+        @Override
+        protected Void doInBackground(Message... msgs) {
+            Message message = msgs[0];
+
+            try (Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),Integer.parseInt(message.getSuccNode()));
+                 BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+                 BufferedReader br = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            ){
+                // pass the query to successor
+                String msgToSend = message.toString();
+                bw.write(msgToSend + "\n");
+                bw.flush();
+                Log.v(TAG, "passed delete to successor " + msgToSend);
+
+                // read the response back
+                String line = br.readLine();
+                Message respMsg = new Message(line);
+                mDelCount += Integer.parseInt(respMsg.getKey());
+                Log.v(TAG, "delete response from peer - " + line);
+
+            } catch (IOException ioe) {
+                Log.e(TAG, "Error sending query to successor");
+                ioe.printStackTrace();
+            }
+
+            // notify the main thread
+            mDeleteDoneCV.open();
             Log.v(TAG, "notified the main thread");
 
             return null;

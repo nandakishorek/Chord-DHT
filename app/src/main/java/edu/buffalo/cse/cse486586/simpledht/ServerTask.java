@@ -61,10 +61,11 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
 
                 // receive join response
                 line = br.readLine();
-                msg = new Message(line);
-                handle_join_resp(msg);
-
-                Log.v(TAG, "Ring join successful");
+                if (line != null) {
+                    msg = new Message(line);
+                    handle_join_resp(msg);
+                    Log.v(TAG, "Ring join successful");
+                }
             } catch (IOException ioe) {
                 Log.e(TAG, "Error joining the ring");
                 ioe.printStackTrace();
@@ -92,6 +93,9 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
                         case ADD:
                             Map.Entry<String, String> entry = msg.getResult().get(0);
                             mMessageStore.insert(entry.getKey(), entry.getValue());
+                            break;
+                        case DEL:
+                            handle_delete(msg, bw);
                             break;
                         case SUCC:
                             mState.setSucNode(msg.getNodePort(), msg.getNodeId());
@@ -239,6 +243,28 @@ public class ServerTask extends AsyncTask<ServerSocket, String, Void> {
             Log.v(TAG, "handle_lookup sent resp - " + resp);
         } catch (IOException ioe) {
             Log.v(TAG, "error sending back query response");
+            ioe.printStackTrace();
+        }
+    }
+
+    /**
+     * Method to handle delete cmd from peers
+     * @param msg
+     * @param bw
+     */
+    private void handle_delete(Message msg, BufferedWriter bw) {
+        // issue delete to local provider
+        int delCount = mMessageStore.delete(msg.getKey(), msg.getNodePort(), msg.getNodeId());
+
+        // send the response back
+        msg.setKey(Integer.toString(delCount)); // send the number of keys deleted in the key field
+        try{
+            String resp = msg.toString();
+            bw.write(resp + "\n");
+            bw.flush();
+            Log.v(TAG, "handle_delete sent resp - " + resp);
+        } catch (IOException ioe) {
+            Log.v(TAG, "error sending back delete response");
             ioe.printStackTrace();
         }
     }

@@ -14,7 +14,7 @@ public class Message {
     private static final String DELIM = "|";
 
     // message type join - join request, lookup - key lookup
-    public enum Type {JOIN, LOOKUP, ADD, SUCC, PRED};
+    public enum Type {JOIN, LOOKUP, ADD, DEL, SUCC, PRED};
 
     private Type type;
     private String key; // query key

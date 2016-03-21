@@ -67,4 +67,17 @@ public class MessageStore {
         }
         return resultList;
     }
+
+    /**
+     *
+     * @param key
+     * @param nodePort
+     * @param nodeId
+     * @return
+     */
+    public int delete(String key, String nodePort, String nodeId) {
+        int delCount = mContentResolver.delete(mUri, key, new String[]{nodePort, nodeId});
+        Log.v(TAG, "delete count " + delCount);
+        return delCount;
+    }
 }
